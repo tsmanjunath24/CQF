@@ -1,0 +1,109 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  crypto-dca-bot
+  Monthly Bitcoin DCA via Kraken Pro API — limit orders, hosted on Lambda.
+
+Globals:
+  Function:
+    Timeout: 300        # 5 minutes — enough for limit order polling
+    MemorySize: 256
+    Runtime: python3.12
+    Environment:
+      Variables:
+        # Non-secret config — override at deploy time as needed
+        KRAKEN_PAIR: XXBTZGBP
+        DCA_AMOUNT_GBP: "100"
+        LIMIT_OFFSET_PCT: "0.001"
+        ORDER_TIMEOUT_MINUTES: "30"
+        AWS_REGION: !Ref AWS::Region
+        # Secrets are pulled from SSM Parameter Store at runtime (see code comments)
+        # Do NOT put KRAKEN_API_KEY / KRAKEN_API_SECRET here as plain text.
+        # Store them with:
+        #   aws ssm put-parameter --name /dca/KRAKEN_API_KEY --value "..." --type SecureString
+        #   aws ssm put-parameter --name /dca/KRAKEN_API_SECRET --value "..." --type SecureString
+        # Then load them in Lambda via boto3 ssm.get_parameter() or set them as
+        # Lambda env vars referencing SSM (requires adding ssm:GetParameter to the role below).
+
+Parameters:
+  SenderEmail:
+    Type: String
+    Description: SES verified sender email address
+  RecipientEmail:
+    Type: String
+    Description: Email address to receive DCA notifications
+  DryRun:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Set to true to simulate without placing real orders
+
+Resources:
+  DCABotFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: crypto-dca-bot
+      CodeUri: ../           # SAM builds from crypto_dca/ root
+      Handler: dca_bot.handler
+      Description: Monthly Bitcoin DCA bot using Kraken limit orders
+      Environment:
+        Variables:
+          SES_SENDER_EMAIL: !Ref SenderEmail
+          SES_RECIPIENT_EMAIL: !Ref RecipientEmail
+          DRY_RUN: !Ref DryRun
+          # Inject secrets from SSM at deploy time (or use Lambda env var from SSM reference):
+          KRAKEN_API_KEY: "{{resolve:ssm:/dca/KRAKEN_API_KEY}}"
+          KRAKEN_API_SECRET: "{{resolve:ssm:/dca/KRAKEN_API_SECRET}}"
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - ssm:GetParameters
+              Resource:
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/dca/*"
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: "*"
+      Events:
+        MonthlySchedule:
+          Type: Schedule
+          Properties:
+            Name: crypto-dca-monthly-trigger
+            Description: Trigger DCA bot on the 1st of each month at 09:00 UTC
+            Schedule: cron(0 9 1 * ? *)   # 1st of month, 9am UTC
+            Enabled: true
+
+  # CloudWatch alarm — alert if Lambda errors
+  DCABotErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: crypto-dca-bot-errors
+      AlarmDescription: DCA Lambda invocation failed
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Dimensions:
+        - Name: FunctionName
+          Value: crypto-dca-bot
+      Statistic: Sum
+      Period: 86400       # 1 day
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  DCABotFunction:
+    Description: Lambda function ARN
+    Value: !GetAtt DCABotFunction.Arn
+  DCABotSchedule:
+    Description: EventBridge schedule (1st of each month 09:00 UTC)
+    Value: cron(0 9 1 * ? *)
