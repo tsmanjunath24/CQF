@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Secrets — never commit these
+.env
+*.pem
+
+# DCA bot artefacts
+crypto_dca/.serverless/
+crypto_dca/lambda.zip
+crypto_dca/.aws-sam/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db

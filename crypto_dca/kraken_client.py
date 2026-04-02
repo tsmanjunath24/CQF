@@ -69,7 +69,8 @@ class KrakenClient:
         if data["error"]:
             raise KrakenAPIError(f"Ticker error: {data['error']}")
 
-        # Kraken may return the pair under an alias key; grab first result
+        # Kraken normalises pair names internally (e.g. XXBTZGBP not XBTGBP)
+        # so grab the first (and only) value regardless of the key returned
         result = next(iter(data["result"].values()))
         return Ticker(
             ask=float(result["a"][0]),
